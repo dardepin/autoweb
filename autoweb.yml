@@ -1,0 +1,180 @@
+#script for configuring web server for deb(centos may be later) servers. includes: nginx, php, pgsql. (roles may be used later). database will be created automatically. db passwords also will be generated automatically. or you can restart script for passwords changing.
+#usage: ansible-playbook -i hosts.ini autoweb.yml --ask-pass
+- hosts: web-servers
+  become: true
+  gather_facts: true
+  remote_user: thomas
+
+  vars:
+    pwd: "{{ lookup('password', '/dev/null length=15 chars=ascii_letters,digits') }}"
+    site: "site.local"
+    db_name: "data"
+    db_user: "datauser"
+    db_admin: "admin"
+  
+  tasks:
+    - block:
+      - name: install necessary packages
+        apt:
+          name:
+          - python3-psycopg2
+          - python3-openssl
+          - libssl-dev
+          - php-pgsql
+          - openssl
+          - php-fpm
+          - gnupg2
+          - nginx
+          - wget
+          - vim
+          - ufw
+          - mc
+      - name: know lsb release
+        shell: "lsb_release -cs"
+        register: lsb_release
+      - name: display lsb release
+        debug:
+          msg: "current lsb release: {{ lsb_release.stdout }}"
+      - name: add repo key
+        apt_key:
+          url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          state: present
+      - name: add pgsql repo to sources
+        apt_repository:
+          repo: "deb https://apt.postgresql.org/pub/repos/apt/ {{ lsb_release.stdout }}-pgdg main"
+          filename: pgdg
+      - name: update
+        apt:
+          update_cache: true
+      - name: install necessary packets
+        apt:
+          name:
+            - postgresql-14
+      - name: start & enable pgsql server
+        service:
+          name: postgresql #in debian
+          state: started
+          enabled: true
+    - block:
+      - name: random password for admin
+        set_fact:
+          admin_pass: "{{ pwd }}"
+      - name: random password for user
+        set_fact:
+          user_pass: "{{ pwd }}"
+      - name: copy your passwords!
+        debug:
+          msg: "{{ db_admin }}: {{ admin_pass }}; {{ db_user }}: {{ user_pass }}"
+      - name: sleep for 10 seconds
+        pause:
+          seconds: 10
+
+      - name: create the reports database
+        become_user: postgres
+        become: true
+        postgresql_db:
+          name: "{{ db_name }}"
+          state: present
+
+      - name: create admin user, set password, grant privs
+        become: true
+        become_user: postgres
+        postgresql_user:
+            name: "{{ db_admin }}"
+            password: "{{ admin_pass }}"
+            role_attr_flags: CREATEDB,CREATEROLE
+            state: present
+
+      - name: Create user, set password
+        become: true
+        become_user: postgres
+        postgresql_user:
+            db: "{{ db_name }}"
+            name: "{{ db_user }}"
+            password: "{{ user_pass }}"
+            role_attr_flags: NOCREATEDB,NOSUPERUSER
+            state: present
+
+      - name: grant privs to user
+        become: true
+        become_user: postgres
+        postgresql_privs:
+          type: database
+          roles: "{{ db_user }}"
+          database: "{{ db_name }}"
+          privs: ALL
+    - block:
+        - name: generate dh parameters
+          openssl_dhparam:
+            path: "/etc/nginx/dhparam.pem"
+            size: 2048
+        - name: create csr directory
+          file:
+            path: "/etc/ssl/csr/"
+            state: directory
+            mode: 0755
+        - name: generate certificate key
+          openssl_privatekey:
+            path: "/etc/ssl/private/{{ site }}.self-signed.pem"
+        - name: generate certificate request
+          openssl_csr:
+            path: "/etc/ssl/csr/{{ site }}.self-signed.csr"
+            privatekey_path: "/etc/ssl/private/{{ site }}.self-signed.pem"
+            country_name: NE
+            organization_name: RCG
+            organizational_unit_name: Toilet cleaners
+            email_address: nomail@mail.com
+            common_name: "{{ site }}"
+        - name: generate a self signed certificate
+          openssl_certificate:
+            path: "/etc/ssl/certs/{{ site }}.self-signed.crt"
+            privatekey_path: "/etc/ssl/private/{{ site }}.self-signed.pem"
+            csr_path: "/etc/ssl/csr/{{ site }}.self-signed.csr"
+            provider: selfsigned
+
+        - name: enable nginx
+          service:
+            name: nginx
+            enabled: true
+        - name: configure nginx.conf
+          lineinfile:
+            path: "/etc/nginx/nginx.conf"
+            regexp: "# server_names_hash_bucket_size 64;"
+            line: "server_names_hash_bucket_size 64;"
+          notify: restart nginx
+        - name: +ssl-snippet
+          template:
+            src: "self-signed.conf.j2"
+            dest: "/etc/nginx/snippets/{{ site }}.self-signed.conf"
+          notify: restart nginx
+        - name: +ssl-params
+          copy:
+            src: "files/ssl-params.conf"
+            dest: "/etc/nginx/snippets/ssl-params.conf"
+          notify: restart nginx
+        - name: add virt domain
+          template:
+            src: domain.local.j2
+            dest: "/etc/nginx/sites-available/{{ site }}"
+          notify: restart nginx
+        - name: enable virt domain
+          file:
+            src: "/etc/nginx/sites-available/{{ site }}"
+            dest: "/etc/nginx/sites-enabled/{{ site }}"
+            state: link
+          notify: restart nginx
+        - name: configure default site
+          file:
+            path: "/var/www/{{ site }}/"
+            state: directory
+            mode: 0755
+        - name: copy php file to
+          template:
+            src: "connect.php.j2"
+            dest: "/var/www/{{ site }}/connect.php"
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
+...

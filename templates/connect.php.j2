@@ -1,0 +1,4 @@
+<?php
+$connection1 = pg_connect("host=127.0.0.1 port=5432 dbname={{ db_name }} user={{ db_user }} password={{ user_pass }}") or die("pg_connect #1 returned error");
+$connection2 = pg_connect("host=127.0.0.1 port=5432 dbname={{ db_name }} user={{ db_admin }} password={{ admin_pass }}") or die("pg_connect #2 returned error");
+?>
