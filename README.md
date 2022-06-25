@@ -2,7 +2,7 @@
 For GIT (Github) testing only! Ansible playbooks for fast services configuration
 ## Current Releases
 0.1 - Initial Commit <br />
-0.2 - Same playbook for CentOS 9
+0.2 - Same playbook for CentOS 9 <br />
 ## Platforms
 Tested in Debian 11.3 netinst and CentOS 9 Stream. Required sudo installed and user must be in the sudo (wheel for CentOS) group. <br />
 ## Usage
