@@ -1,0 +1,202 @@
+#script for configuring web server for centos 9 stream servers. includes: nginx, php, pgsql. (roles may be used later). database will be created automatically. db passwords also will be generated automatically. or you can restart script for passwords changing. connect to https://your_url/connect.php after installation (blank page usually means successful installation).
+#you may need to add 'remote_tmp = $HOME/.ansible/tmp' to ansible configuration file.
+#usage: ansible-playbook -i hosts.ini autoweb-centos.yml --ask-pass
+---
+- hosts: web-servers
+  become: true
+  remote_user: thomas
+
+  vars:
+    pwd: "{{ lookup('password', '/dev/null length=15 chars=ascii_letters,digits') }}"
+    site: "site.local"
+    db_name: "reports"
+    db_user: "reportuser"
+    db_admin: "admin"
+
+  tasks:
+    - block:
+      - name: disabling selinux for pgsql
+        selinux:
+          state: disabled
+        notify: restart server
+      - name: allow http
+        firewalld:
+          service: http
+          permanent: yes
+          state: enabled
+      - name: allow https
+        firewalld:
+          service: https
+          permanent: yes
+          state: enabled
+      - name: install postgresql-14 repo
+        dnf:
+          name: https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+          disable_gpg_check: true
+          state: present
+      - name: install pgsql and more
+        dnf: "name={{ item }} state=present"
+        with_items:
+          - python3-cryptography
+          - postgresql14-server
+          - python3-psycopg2
+          - php-pgsql
+          - openssl
+          - php-fpm
+          - nginx
+          - php
+          - mc
+      - name: is it pg data already exists?
+        find:
+          paths: "/var/lib/pgsql/14/data/"
+        register: datafiles
+      - name: init pg data when required
+        shell: "/usr/bin/postgresql-14-setup initdb"
+        when: "datafiles.matched == 0"
+      - name: start & enable pgsql server
+        service:
+          name: postgresql-14
+          state: started
+          enabled: true
+      - name: random password for admin
+        set_fact:
+          admin_pass: "{{ pwd }}"
+      - name: random password for user
+        set_fact:
+          user_pass: "{{ pwd }}"
+      - name: copy your passwords!
+        debug:
+          msg: "{{ db_admin }}: {{ admin_pass }}; {{ db_user }}: {{ user_pass }}"
+      - name: sleep for 10 seconds
+        pause:
+          seconds: 10
+
+      - name: create the reports database
+        become_user: postgres
+        become: true
+        postgresql_db:
+          name: "{{ db_name }}"
+          state: present
+
+      - name: create admin user, set password, grant privs
+        become: true
+        become_user: postgres
+        postgresql_user:
+          name: "{{ db_admin }}"
+          password: "{{ admin_pass }}"
+          role_attr_flags: CREATEDB,CREATEROLE
+          state: present
+
+      - name: Create user, set password
+        become: true
+        become_user: postgres
+        postgresql_user:
+          db: "{{ db_name }}"
+          name: "{{ db_user }}"
+          password: "{{ user_pass }}"
+          role_attr_flags: NOCREATEDB,NOSUPERUSER
+          state: present
+
+      - name: grant privs to user
+        become: true
+        become_user: postgres
+        postgresql_privs:
+          type: database
+          roles: "{{ db_user }}"
+          database: "{{ db_name }}"
+          privs: ALL
+    - block:
+      - name: start & enable nginx server
+        service:
+          name: nginx
+          state: started
+          enabled: true
+      - name: generate dh parameters
+        openssl_dhparam:
+          path: "/etc/nginx/dhparam.pem"
+          size: 2048
+      - name: create csr directory
+        file:
+          path: "/etc/ssl/csr/"
+          state: directory
+          mode: 0755
+      - name: create key directory
+        file:
+          path: "/etc/ssl/private/"
+          state: directory
+          mode: 0755
+      - name: generate certificate key
+        openssl_privatekey:
+          path: "/etc/ssl/private/{{ site }}.self-signed.pem"
+      - name: generate certificate request
+        openssl_csr:
+            path: "/etc/ssl/csr/{{ site }}.self-signed.csr"
+            privatekey_path: "/etc/ssl/private/{{ site }}.self-signed.pem"
+            country_name: NE
+            organization_name: RCG
+            organizational_unit_name: Toilet cleaners
+            email_address: nomail@mail.com
+            common_name: "{{ site }}"
+      - name: generate a self signed certificate
+        openssl_certificate:
+          path: "/etc/ssl/certs/{{ site }}.self-signed.crt"
+          privatekey_path: "/etc/ssl/private/{{ site }}.self-signed.pem"
+          csr_path: "/etc/ssl/csr/{{ site }}.self-signed.csr"
+          provider: selfsigned
+      - name: create snippets directory
+        file:
+          path: "/etc/nginx/snippets/"
+          state: directory
+      - name: +ssl-snippet
+        template:
+          src: "self-signed.conf.j2"
+          dest: "/etc/nginx/snippets/{{ site }}.self-signed.conf"
+        notify: restart nginx
+      - name: +ssl-params
+        copy:
+          src: "files/ssl-params.conf"
+          dest: "/etc/nginx/snippets/ssl-params.conf"
+        notify: restart nginx
+      - name: create folder for site
+        file:
+          path: "/var/www/{{ site }}/"
+          state: directory
+      - name: copy connect script
+        template:
+          src: "connect.php.j2"
+          dest: "/var/www/{{ site }}/connect.php"
+      - name: copy site config
+        template:
+          src: "domain.local.conf.j2" #cent os config
+          dest: "/etc/nginx/conf.d/{{site}}.conf"
+        notify: restart nginx
+    - block:
+      - name: start & enable nginx server
+        service:
+          name: php-fpm
+          state: started
+          enabled: true
+      - name: configure php-fpm. change user
+        lineinfile:
+          path: "/etc/php-fpm.d/www.conf"
+          regexp: "^user"
+          line: "user = nginx"
+        notify: restart php
+      - name: configure php-fpm. change group
+        lineinfile:
+          path: "/etc/php-fpm.d/www.conf"
+          regexp: "^group"
+          line: "group = nginx"
+        notify: restart php
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
+    - name: restart php
+      service:
+        name: php-fpm
+        state: restarted
+    - name: restart server
+      reboot:
+...

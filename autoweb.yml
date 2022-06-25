@@ -1,5 +1,7 @@
-#script for configuring web server for deb(centos may be later) servers. includes: nginx, php, pgsql. (roles may be used later). database will be created automatically. db passwords also will be generated automatically. or you can restart script for passwords changing.
+#script for configuring web server for deb 11 servers. includes: nginx, php, pgsql. (roles may be used later). database will be created automatically. db passwords also will be generated automatically. or you can restart script for passwords changing. connect to https://your_url/connect.php after installation (blank page usually means successful installation).
+#you may need to add 'allow_world_readable_tmpfiles = true' to ansible configuration file
 #usage: ansible-playbook -i hosts.ini autoweb.yml --ask-pass
+---
 - hosts: web-servers
   become: true
   gather_facts: true
@@ -52,7 +54,7 @@
             - postgresql-14
       - name: start & enable pgsql server
         service:
-          name: postgresql #in debian
+          name: postgresql
           state: started
           enabled: true
     - block:

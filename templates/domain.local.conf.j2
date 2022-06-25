@@ -1,0 +1,25 @@
+#for cent os 9
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ site }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 http2 ssl;
+    listen [::]:443 http2 ssl;
+    root /var/www/{{ site }};
+
+    server_name {{ site }};
+    include snippets/{{ site }}.self-signed.conf;
+    include snippets/ssl-params.conf;
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_pass unix:/run/php-fpm/www.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+}
